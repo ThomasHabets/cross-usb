@@ -1,5 +1,5 @@
 use crate::usb::{
-    ControlIn, ControlOut, ControlType, UsbDeviceInfo, UsbDevice, UsbInterface, Recipient, Error,
+    ControlIn, ControlOut, ControlType, Error, Recipient, UsbDevice, UsbDeviceInfo, UsbInterface,
 };
 
 #[derive(Clone, Debug)]
@@ -58,9 +58,7 @@ impl DeviceFilter {
     }
 }
 
-pub async fn get_device(
-    device_filters: Vec<DeviceFilter>
-) -> Result<DeviceInfo, Error> {
+pub async fn get_device(device_filters: Vec<DeviceFilter>) -> Result<DeviceInfo, Error> {
     let devices = nusb::list_devices().unwrap();
 
     let mut device_info = None;
@@ -200,10 +198,7 @@ impl UsbDevice for Device {
             Err(err) => return Err(Error::CommunicationError(err.to_string())),
         };
 
-        Ok(Interface {
-            interface,
-            number
-        })
+        Ok(Interface { interface, number })
     }
 
     async fn detach_and_open_interface(&self, number: u8) -> Result<Self::Interface, Error> {
@@ -212,10 +207,7 @@ impl UsbDevice for Device {
             Err(err) => return Err(Error::CommunicationError(err.to_string())),
         };
 
-        Ok(Interface {
-            interface,
-            number
-        })
+        Ok(Interface { interface, number })
     }
 
     async fn reset(&self) -> Result<(), Error> {

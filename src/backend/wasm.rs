@@ -1,16 +1,17 @@
 //#![cfg_attr(debug_assertions, allow(dead_code, unused_imports))]
 use wasm_bindgen::prelude::*;
 
-use js_sys::{Array, Object, Promise, Uint8Array};
+use js_sys::{Array, Uint8Array};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
-    UsbControlTransferParameters, UsbDevice as WasmUsbDevice, UsbDeviceRequestOptions,
-    UsbInTransferResult, UsbOutTransferResult, UsbRecipient, UsbRequestType,
+    UsbControlTransferParameters, UsbDevice as WasmUsbDevice, UsbDeviceFilter,
+    UsbDeviceRequestOptions, UsbInTransferResult, UsbOutTransferResult, UsbRecipient,
+    UsbRequestType,
 };
 
 // Crate stuff
 use crate::usb::{
-    ControlIn, ControlOut, ControlType, UsbDeviceInfo, UsbDevice, UsbInterface, Recipient, Error,
+    ControlIn, ControlOut, ControlType, Error, Recipient, UsbDevice, UsbDeviceInfo, UsbInterface,
 };
 
 #[wasm_bindgen]
@@ -60,6 +61,57 @@ impl DeviceFilter {
     }
 }
 
+fn matches_filter(device: &WasmUsbDevice, info: &DeviceFilter) -> bool {
+    let mut result = false;
+
+    if let Some(vendor_id) = info.vendor_id {
+        result = vendor_id == device.vendor_id();
+    }
+
+    if let Some(product_id) = info.product_id {
+        result = product_id == device.product_id();
+    }
+
+    if let Some(class) = info.class {
+        result = class == device.device_class();
+    }
+
+    if let Some(subclass) = info.subclass {
+        result = subclass == device.device_subclass();
+    }
+
+    if let Some(protocol) = info.protocol {
+        result = protocol == device.device_protocol();
+    }
+
+    result
+}
+
+fn device_request_options(device_filter: &[DeviceFilter]) -> UsbDeviceRequestOptions {
+    let filters = device_filter.iter().map(|filter| {
+        let js_filter = UsbDeviceFilter::new();
+        if let Some(vid) = filter.vendor_id {
+            js_filter.set_vendor_id(vid);
+        }
+        if let Some(pid) = filter.product_id {
+            js_filter.set_product_id(pid);
+        }
+        if let Some(class) = filter.class {
+            js_filter.set_class_code(class);
+        }
+        if let Some(subclass) = filter.subclass {
+            js_filter.set_subclass_code(subclass);
+        }
+        if let Some(protocol) = filter.protocol {
+            js_filter.set_protocol_code(protocol);
+        }
+        js_filter
+    });
+
+    let filters: Array<UsbDeviceFilter> = Array::from_iter_typed(filters);
+    UsbDeviceRequestOptions::new(&filters.to_vec())
+}
+
 #[wasm_bindgen]
 pub async fn get_device(device_filter: Vec<DeviceFilter>) -> Result<DeviceInfo, js_sys::Error> {
     let window = web_sys::window().unwrap();
@@ -67,208 +119,64 @@ pub async fn get_device(device_filter: Vec<DeviceFilter>) -> Result<DeviceInfo, 
     let navigator = window.navigator();
     let usb = navigator.usb();
 
-    let device_list: Array = match JsFuture::from(Promise::resolve(&usb.get_devices())).await {
-        Ok(list) => list.into(),
-        Err(_) => Array::new(),
+    let device_list: Array<WasmUsbDevice> = match JsFuture::from(usb.get_devices()).await {
+        Ok(list) => list,
+        Err(_) => Array::new_typed(),
     };
 
     // Check if the device is already paired, if so, we don't need to request it again
-    for js_device in device_list {
-        let device: WasmUsbDevice = js_device.into();
-
-        if device_filter.iter().any(|info| {
-            let mut result = false;
-
-            if info.vendor_id.is_some() {
-                result = info.vendor_id.unwrap() == device.vendor_id();
-            }
-
-            if info.product_id.is_some() {
-                result = info.product_id.unwrap() == device.product_id();
-            }
-
-            if info.class.is_some() {
-                result = info.class.unwrap() == device.device_class();
-            }
-
-            if info.subclass.is_some() {
-                result = info.subclass.unwrap() == device.device_subclass();
-            }
-
-            if info.protocol.is_some() {
-                result = info.protocol.unwrap() == device.device_protocol();
-            }
-
-            result
-        }) {
-            let _open_promise = JsFuture::from(Promise::resolve(&device.open())).await?;
+    for device in device_list {
+        if device_filter
+            .iter()
+            .any(|info| matches_filter(&device, info))
+        {
+            let _open_promise = JsFuture::from(device.open()).await?;
             return Ok(DeviceInfo { device });
         }
     }
 
-    let arr = Array::new();
-    for filter in device_filter {
-        let js_filter = js_sys::Object::new();
-        if let Some(vid) = filter.vendor_id {
-            js_sys::Reflect::set(
-                &js_filter,
-                &JsValue::from_str("vendorId"),
-                &JsValue::from(vid),
-            )
-            .unwrap();
-        }
-        if let Some(pid) = filter.product_id {
-            js_sys::Reflect::set(
-                &js_filter,
-                &JsValue::from_str("productId"),
-                &JsValue::from(pid),
-            )
-            .unwrap();
-        }
-        if let Some(class) = filter.class {
-            js_sys::Reflect::set(
-                &js_filter,
-                &JsValue::from_str("classCode"),
-                &JsValue::from(class),
-            )
-            .unwrap();
-        }
-        if let Some(subclass) = filter.subclass {
-            js_sys::Reflect::set(
-                &js_filter,
-                &JsValue::from_str("subclassCode"),
-                &JsValue::from(subclass),
-            )
-            .unwrap();
-        }
-        if let Some(pro) = filter.protocol {
-            js_sys::Reflect::set(
-                &js_filter,
-                &JsValue::from_str("protocolCode"),
-                &JsValue::from(pro),
-            )
-            .unwrap();
-        }
-        arr.push(&js_filter);
-    }
+    let filters2 = device_request_options(&device_filter);
+    let device: WasmUsbDevice = JsFuture::from(usb.request_device(&filters2)).await?;
 
-    let filters = JsValue::from(&arr);
-    let filters2 = UsbDeviceRequestOptions::new(&filters);
-
-    let device: WasmUsbDevice = JsFuture::from(Promise::resolve(&usb.request_device(&filters2)))
-        .await?
-        .into();
-
-    let _open_promise = JsFuture::from(Promise::resolve(&device.open())).await?;
+    let _open_promise = JsFuture::from(device.open()).await?;
 
     Ok(DeviceInfo { device })
 }
 
 #[wasm_bindgen]
-pub async fn get_device_list(device_filter: Vec<DeviceFilter>) -> Result<Vec<DeviceInfo>, js_sys::Error> {
+pub async fn get_device_list(
+    device_filter: Vec<DeviceFilter>,
+) -> Result<Vec<DeviceInfo>, js_sys::Error> {
     let window = web_sys::window().unwrap();
 
     let navigator = window.navigator();
     let usb = navigator.usb();
 
-    let device_list: Array = match JsFuture::from(Promise::resolve(&usb.get_devices())).await {
-        Ok(list) => list.into(),
-        Err(_) => Array::new(),
+    let device_list: Array<WasmUsbDevice> = match JsFuture::from(usb.get_devices()).await {
+        Ok(list) => list,
+        Err(_) => Array::new_typed(),
     };
 
     let mut devices = Vec::new();
     // Check if the device is already paired, if so, we don't need to request it again
-    for js_device in device_list {
-        let device: WasmUsbDevice = js_device.into();
-
-        if device_filter.iter().any(|info| {
-            let mut result = false;
-
-            if info.vendor_id.is_some() {
-                result = info.vendor_id.unwrap() == device.vendor_id();
-            }
-
-            if info.product_id.is_some() {
-                result = info.product_id.unwrap() == device.product_id();
-            }
-
-            if info.class.is_some() {
-                result = info.class.unwrap() == device.device_class();
-            }
-
-            if info.subclass.is_some() {
-                result = info.subclass.unwrap() == device.device_subclass();
-            }
-
-            if info.protocol.is_some() {
-                result = info.protocol.unwrap() == device.device_protocol();
-            }
-
-            result
-        }) {
-            let _open_promise = JsFuture::from(Promise::resolve(&device.open())).await?;
+    for device in device_list {
+        if device_filter
+            .iter()
+            .any(|info| matches_filter(&device, info))
+        {
+            let _open_promise = JsFuture::from(device.open()).await?;
             devices.push(DeviceInfo { device });
         }
     }
 
-    let arr = Array::new();
-    for filter in device_filter {
-        let js_filter = js_sys::Object::new();
-        if let Some(vid) = filter.vendor_id {
-            js_sys::Reflect::set(
-                &js_filter,
-                &JsValue::from_str("vendorId"),
-                &JsValue::from(vid),
-            )
-            .unwrap();
-        }
-        if let Some(pid) = filter.product_id {
-            js_sys::Reflect::set(
-                &js_filter,
-                &JsValue::from_str("productId"),
-                &JsValue::from(pid),
-            )
-            .unwrap();
-        }
-        if let Some(class) = filter.class {
-            js_sys::Reflect::set(
-                &js_filter,
-                &JsValue::from_str("classCode"),
-                &JsValue::from(class),
-            )
-            .unwrap();
-        }
-        if let Some(subclass) = filter.subclass {
-            js_sys::Reflect::set(
-                &js_filter,
-                &JsValue::from_str("subclassCode"),
-                &JsValue::from(subclass),
-            )
-            .unwrap();
-        }
-        if let Some(pro) = filter.protocol {
-            js_sys::Reflect::set(
-                &js_filter,
-                &JsValue::from_str("protocolCode"),
-                &JsValue::from(pro),
-            )
-            .unwrap();
-        }
-        arr.push(&js_filter);
-    }
+    let filters2 = device_request_options(&device_filter);
+    let device: WasmUsbDevice = JsFuture::from(usb.request_device(&filters2)).await?;
 
-    let filters = JsValue::from(&arr);
-    let filters2 = UsbDeviceRequestOptions::new(&filters);
-
-    let device: WasmUsbDevice = JsFuture::from(Promise::resolve(&usb.request_device(&filters2)))
-        .await?
-        .into();
-
-    let _open_promise = JsFuture::from(Promise::resolve(&device.open())).await?;
+    let _open_promise = JsFuture::from(device.open()).await?;
 
     devices.push(DeviceInfo { device });
 
-    Ok(devices)
+    return Ok(devices);
 }
 
 impl UsbDeviceInfo for DeviceInfo {
@@ -309,18 +217,17 @@ impl UsbDevice for Device {
     type Interface = Interface;
 
     async fn open_interface(&self, number: u8) -> Result<Interface, Error> {
-        let dev_promise =
-            JsFuture::from(Promise::resolve(&self.device.claim_interface(number))).await;
+        let dev_promise = JsFuture::from(self.device.claim_interface(number)).await;
 
         // Wait for the interface to be claimed
-        let _device: WasmUsbDevice = match dev_promise {
-            Ok(dev) => dev.into(),
+        match dev_promise {
+            Ok(_) => {}
             Err(err) => {
                 return Err(Error::CommunicationError(
                     err.as_string().unwrap_or_default(),
                 ));
             }
-        };
+        }
 
         Ok(Interface {
             device: self.device.clone(),
@@ -333,7 +240,7 @@ impl UsbDevice for Device {
     }
 
     async fn reset(&self) -> Result<(), Error> {
-        let result = JsFuture::from(Promise::resolve(&self.device.reset())).await;
+        let result = JsFuture::from(self.device.reset()).await;
 
         match result {
             Ok(_) => Ok(()),
@@ -344,7 +251,7 @@ impl UsbDevice for Device {
     }
 
     async fn forget(&self) -> Result<(), Error> {
-        let result = JsFuture::from(Promise::resolve(&self.device.forget())).await;
+        let result = JsFuture::from(self.device.forget()).await;
 
         match result {
             Ok(_) => Ok(()),
@@ -384,13 +291,11 @@ impl<'a> UsbInterface<'a> for Interface {
         let length = data.length;
         let params: UsbControlTransferParameters = data.into();
 
-        let promise = Promise::resolve(&self.device.control_transfer_in(&params, length));
-        let result = JsFuture::from(promise).await;
-
-        let transfer_result: UsbInTransferResult = match result {
-            Ok(res) => res.into(),
-            Err(_) => return Err(Error::TransferError),
-        };
+        let transfer_result: UsbInTransferResult =
+            match JsFuture::from(self.device.control_transfer_in(&params, length)).await {
+                Ok(res) => res,
+                Err(_) => return Err(Error::TransferError),
+            };
 
         let data = match transfer_result.data() {
             Some(res) => res.buffer(),
@@ -404,19 +309,16 @@ impl<'a> UsbInterface<'a> for Interface {
 
     async fn control_out(&self, data: crate::usb::ControlOut<'a>) -> Result<usize, Error> {
         let array = Uint8Array::from(data.data);
-        let array_obj = Object::try_from(&array).unwrap();
         let params: UsbControlTransferParameters = data.into();
 
-        let result: UsbOutTransferResult = match JsFuture::from(Promise::resolve(
-            &self
-                .device
-                .control_transfer_out_with_buffer_source(&params, array_obj)
-                .map_err(|j| Error::CommunicationError(j.as_string().unwrap_or_default()))?
-                .into(),
-        ))
+        let result: UsbOutTransferResult = match JsFuture::from(
+            self.device
+                .control_transfer_out_with_u8_array(&params, &array)
+                .map_err(|j| Error::CommunicationError(j.as_string().unwrap_or_default()))?,
+        )
         .await
         {
-            Ok(res) => res.into(),
+            Ok(res) => res,
             Err(_) => return Err(Error::TransferError),
         };
 
@@ -424,14 +326,11 @@ impl<'a> UsbInterface<'a> for Interface {
     }
 
     async fn bulk_in(&self, endpoint: u8, length: usize) -> Result<Vec<u8>, Error> {
-        let promise = Promise::resolve(&self.device.transfer_in(endpoint, length as u32));
-
-        let result = JsFuture::from(promise).await;
-
-        let transfer_result: UsbInTransferResult = match result {
-            Ok(res) => res.into(),
-            Err(_) => return Err(Error::TransferError),
-        };
+        let transfer_result: UsbInTransferResult =
+            match JsFuture::from(self.device.transfer_in(endpoint, length as u32)).await {
+                Ok(res) => res,
+                Err(_) => return Err(Error::TransferError),
+            };
 
         let data = match transfer_result.data() {
             Some(res) => res.buffer(),
@@ -445,20 +344,15 @@ impl<'a> UsbInterface<'a> for Interface {
 
     async fn bulk_out(&self, endpoint: u8, data: &[u8]) -> Result<usize, Error> {
         let array = Uint8Array::from(data);
-        let array_obj = Object::try_from(&array).unwrap();
 
-        let promise = Promise::resolve(
-            &self
-                .device
-                .transfer_out_with_buffer_source(endpoint, array_obj)
-                .map_err(|j| Error::CommunicationError(j.as_string().unwrap_or_default()))?
-                .into(),
-        );
-
-        let result = JsFuture::from(promise).await;
-
-        let transfer_result: UsbOutTransferResult = match result {
-            Ok(res) => res.into(),
+        let transfer_result: UsbOutTransferResult = match JsFuture::from(
+            self.device
+                .transfer_out_with_u8_array(endpoint, &array)
+                .map_err(|j| Error::CommunicationError(j.as_string().unwrap_or_default()))?,
+        )
+        .await
+        {
+            Ok(res) => res,
             Err(_) => return Err(Error::TransferError),
         };
 

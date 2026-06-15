@@ -63,8 +63,8 @@ pub mod usb;
 /// use cross_usb::prelude::*;
 /// ```
 pub mod prelude {
-    pub use crate::usb::UsbDeviceInfo;
     pub use crate::usb::UsbDevice;
+    pub use crate::usb::UsbDeviceInfo;
     pub use crate::usb::UsbInterface;
 }
 
@@ -173,7 +173,7 @@ macro_rules! device_filter {
 }
 
 #[cfg(all(target_family = "wasm", not(web_sys_unstable_apis)))]
-compile_error!{
+compile_error! {
     "Cannot compile `web-sys` (a dependency of this crate) with USB support without `web_sys_unstable_apis`!
 Please check https://wasm-bindgen.github.io/wasm-bindgen/web-sys/unstable-apis.html for more info."
 }
