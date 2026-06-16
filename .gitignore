@@ -11,3 +11,4 @@ www
 .xwin-cache/
 .travis
 .appveyor
+*.swp
