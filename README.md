@@ -1,3 +1,7 @@
+## This is a temporary crate to unblock using newer web-sys etc
+
+See <https://github.com/G2-Games/cross-usb/issues/7>
+
 # Cross USB
 [![Lib.rs Version](https://img.shields.io/crates/v/cross_usb?style=for-the-badge&logo=rust&label=lib.rs&color=%23a68bfc)](https://lib.rs/crates/cross_usb)
 [![docs.rs](https://img.shields.io/docsrs/cross_usb?style=for-the-badge)](https://docs.rs/cross_usb/)
